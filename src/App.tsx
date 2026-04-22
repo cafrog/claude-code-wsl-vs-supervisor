@@ -9,6 +9,11 @@ import type { Agent, Project } from "./types";
 import "./App.css";
 
 const COLLAPSE_STORAGE_KEY = "claude-code-wsl-vs-supervisor:collapsed-projects";
+const SORT_STORAGE_KEY = "claude-code-wsl-vs-supervisor:sort";
+
+type SortKey = "default" | "status" | "agent" | "lastMessage" | "lastResponse" | "delta";
+type SortDir = "asc" | "desc";
+type SortState = { key: SortKey; dir: SortDir };
 
 function loadCollapsed(): Record<string, boolean> {
   try {
@@ -26,6 +31,68 @@ function saveCollapsed(m: Record<string, boolean>): void {
   }
 }
 
+function loadSort(): SortState {
+  try {
+    const v = localStorage.getItem(SORT_STORAGE_KEY);
+    if (!v) return { key: "default", dir: "asc" };
+    const parsed = JSON.parse(v);
+    if (parsed && typeof parsed.key === "string" && typeof parsed.dir === "string") {
+      return { key: parsed.key, dir: parsed.dir };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { key: "default", dir: "asc" };
+}
+function saveSort(s: SortState): void {
+  try {
+    localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(s));
+  } catch {
+    /* ignore */
+  }
+}
+
+const STATUS_RANK: Record<string, number> = { thinking: 0, coding: 1, waiting: 2 };
+
+function compareAgents(a: Agent, b: Agent, key: SortKey): number {
+  switch (key) {
+    case "status":
+      return (STATUS_RANK[a.status] ?? 99) - (STATUS_RANK[b.status] ?? 99);
+    case "agent":
+      return (a.name ?? `#${a.pid}`).localeCompare(b.name ?? `#${b.pid}`);
+    case "lastMessage":
+      // asc = most recent first (highest ts on top)
+      return (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0);
+    case "lastResponse":
+      return (b.lastResponseAt ?? 0) - (a.lastResponseAt ?? 0);
+    case "delta":
+      // asc = freshest first (smallest elapsed)
+      return (b.lastMessageAt ?? b.startedAt) - (a.lastMessageAt ?? a.startedAt);
+    default:
+      return 0;
+  }
+}
+
+function sortAgents(agents: Agent[], s: SortState): Agent[] {
+  if (s.key === "default") return agents;
+  const sign = s.dir === "asc" ? 1 : -1;
+  return [...agents].sort((a, b) => sign * compareAgents(a, b, s.key));
+}
+
+function compareProjectsBySort(a: Project, b: Project, s: SortState): number {
+  if (s.key === "default") return 0;
+  const pickBest = (agents: Agent[]): Agent | null => {
+    if (agents.length === 0) return null;
+    return [...agents].sort((x, y) => compareAgents(x, y, s.key))[0];
+  };
+  const aBest = pickBest(a.agents);
+  const bBest = pickBest(b.agents);
+  if (!aBest && !bBest) return 0;
+  if (!aBest) return 1;
+  if (!bBest) return -1;
+  return compareAgents(aBest, bBest, s.key);
+}
+
 export default function App() {
   const { projects, totalAgents } = useAgents();
   const { orderedProjects, moveProject } = useProjectOrder(projects);
@@ -33,6 +100,7 @@ export default function App() {
   const [filter, setFilter] = useState<ViewFilter>({ kind: "all" });
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(loadCollapsed);
+  const [sort, setSort] = useState<SortState>(loadSort);
   // Store a STABLE identifier for the chat target, then resolve it to the
   // latest agent/project data on every render so the panel updates live.
   const [chatTargetPid, setChatTargetPid] = useState<number | null>(null);
@@ -62,16 +130,36 @@ export default function App() {
       if (filter.kind === "status" && a.status !== filter.status) return false;
       return true;
     };
-    return orderedProjects
+    const filtered = orderedProjects
       .filter((p) => {
         if (filter.kind === "project" && p.name !== filter.name) return false;
         if (q && !p.name.toLowerCase().includes(q) &&
             !p.agents.some(matchAgent)) return false;
         return true;
       })
-      .map((p) => ({ ...p, agents: p.agents.filter(matchAgent) }))
+      .map((p) => ({
+        ...p,
+        agents: sortAgents(p.agents.filter(matchAgent), sort),
+      }))
       .filter((p) => p.agents.length > 0);
-  }, [orderedProjects, filter, search]);
+
+    if (sort.key === "default") return filtered;
+    const sign = sort.dir === "asc" ? 1 : -1;
+    return [...filtered].sort(
+      (a, b) => sign * compareProjectsBySort(a, b, sort)
+    );
+  }, [orderedProjects, filter, search, sort]);
+
+  function toggleSort(key: SortKey) {
+    setSort((prev) => {
+      let next: SortState;
+      if (prev.key !== key) next = { key, dir: "asc" };
+      else if (prev.dir === "asc") next = { key, dir: "desc" };
+      else next = { key: "default", dir: "asc" };
+      saveSort(next);
+      return next;
+    });
+  }
 
   function toggleCollapse(name: string) {
     setCollapsed((m) => {
@@ -156,11 +244,11 @@ export default function App() {
         </div>
 
         <div className="master-head">
-          <div className="th">statut</div>
-          <div className="th">agent</div>
-          <div className="th">dernier message</div>
-          <div className="th">dernière réponse</div>
-          <div className="th right">δt</div>
+          <SortHeader label="statut" k="status" sort={sort} onSort={toggleSort} />
+          <SortHeader label="agent" k="agent" sort={sort} onSort={toggleSort} />
+          <SortHeader label="dernier message" k="lastMessage" sort={sort} onSort={toggleSort} />
+          <SortHeader label="dernière réponse" k="lastResponse" sort={sort} onSort={toggleSort} />
+          <SortHeader label="δt" k="delta" sort={sort} onSort={toggleSort} align="right" />
         </div>
 
         <div className="plist">
@@ -191,6 +279,29 @@ export default function App() {
 
       <style>{appCss}</style>
     </div>
+  );
+}
+
+interface SortHeaderProps {
+  label: string;
+  k: SortKey;
+  sort: SortState;
+  onSort: (k: SortKey) => void;
+  align?: "right";
+}
+
+function SortHeader({ label, k, sort, onSort, align }: SortHeaderProps) {
+  const active = sort.key === k;
+  const indicator = !active ? "↕" : sort.dir === "asc" ? "↑" : "↓";
+  return (
+    <button
+      className={`th sortable ${active ? "active" : ""} ${align === "right" ? "right" : ""}`}
+      onClick={() => onSort(k)}
+      type="button"
+    >
+      <span className="th-label">{label}</span>
+      <span className={`th-arrow ${active ? "on" : "off"}`}>{indicator}</span>
+    </button>
   );
 }
 
@@ -269,9 +380,45 @@ const appCss = `
   letter-spacing: 0.2em;
   text-transform: uppercase;
   padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.12s, background 0.12s;
+}
+.master-head .th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.master-head .th.sortable:hover {
+  color: var(--text);
+  background: rgba(0, 255, 159, 0.04);
+}
+.master-head .th.active {
+  color: var(--phosphor);
+}
+.master-head .th.active .th-label {
+  text-shadow: 0 0 4px rgba(0, 255, 159, 0.25);
 }
 .master-head .th:first-child { padding-left: 12px; }
-.master-head .th.right { text-align: right; }
+.master-head .th.right { text-align: right; justify-content: flex-end; }
+.master-head .th .th-arrow {
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0;
+  transition: color 0.12s, opacity 0.12s;
+}
+.master-head .th .th-arrow.off {
+  opacity: 0.25;
+}
+.master-head .th .th-arrow.on {
+  opacity: 1;
+  color: var(--phosphor);
+}
+.master-head .th.sortable:hover .th-arrow.off { opacity: 0.7; }
 
 .plist { display: flex; flex-direction: column; }
 

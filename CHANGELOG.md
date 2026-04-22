@@ -7,6 +7,18 @@ versioning [SemVer](https://semver.org/lang/fr/).
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-04-22
+
+### Ajouté
+
+- Tri cliquable sur les en-têtes de colonnes (statut, agent, dernier message,
+  dernière réponse, δt). Le tri réordonne les agents **à l'intérieur** de
+  chaque projet et les projets eux-mêmes selon leur agent le plus pertinent
+  (le plus frais pour δt, le plus prioritaire pour le statut, etc.). Cycle
+  des clics : ascendant → descendant → ordre par défaut. Pour les timestamps,
+  ascendant signifie « le plus récent en premier ». Le choix est persisté
+  entre les lancements.
+
 ## [0.1.2] - 2026-04-22
 
 ### Corrigé
