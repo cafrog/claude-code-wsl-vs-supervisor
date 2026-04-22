@@ -2,13 +2,17 @@
   "name": "claude-code-wsl-vs-supervisor-helper",
   "displayName": "Claude Code WSL VS Supervisor Helper",
   "description": "Companion extension for Claude Code WSL VS Supervisor. Focuses VS Code terminals by process PID.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "cafrog",
   "engines": {
     "vscode": "^1.80.0"
   },
-  "extensionKind": ["workspace"],
-  "activationEvents": ["onStartupFinished"],
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {},
   "scripts": {

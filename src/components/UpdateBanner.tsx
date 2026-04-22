@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
@@ -17,29 +17,55 @@ type State =
 export function UpdateBanner() {
   const [state, setState] = useState<State>({ kind: "idle" });
   const [currentVersion, setCurrentVersion] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [flashUpToDate, setFlashUpToDate] = useState(false);
+  const inflightRef = useRef(false);
+  const cancelledRef = useRef(false);
+
+  const runCheck = useCallback(async (manual: boolean) => {
+    if (cancelledRef.current || inflightRef.current) return;
+    inflightRef.current = true;
+    if (manual) setChecking(true);
+    try {
+      const u = await check();
+      if (cancelledRef.current) return;
+      if (u) {
+        setState((s) => (s.kind === "idle" ? { kind: "available", update: u } : s));
+      } else if (manual) {
+        setFlashUpToDate(true);
+        setTimeout(() => setFlashUpToDate(false), 2500);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      inflightRef.current = false;
+      if (!cancelledRef.current) setChecking(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    cancelledRef.current = false;
+
     (async () => {
       try {
         const v = await getVersion();
-        if (!cancelled) setCurrentVersion(v);
+        if (!cancelledRef.current) setCurrentVersion(v);
       } catch {
         /* ignore */
       }
-      try {
-        const u = await check();
-        if (!cancelled && u) {
-          setState({ kind: "available", update: u });
-        }
-      } catch {
-        /* ignore */
-      }
+      await runCheck(false);
     })();
+
+    const onAuto = () => void runCheck(false);
+    const intervalId = setInterval(onAuto, 30 * 60 * 1000);
+    window.addEventListener("focus", onAuto);
+
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
+      clearInterval(intervalId);
+      window.removeEventListener("focus", onAuto);
     };
-  }, []);
+  }, [runCheck]);
 
   async function install() {
     if (state.kind !== "available") return;
@@ -66,19 +92,37 @@ export function UpdateBanner() {
     }
   }
 
-  const bannerClass =
-    state.kind === "idle" ? "update-banner idle" : "update-banner";
+  const isIdle = state.kind === "idle";
+  const bannerClass = isIdle ? "update-banner idle" : "update-banner";
 
   return (
     <>
       <div className={bannerClass}>
-        {state.kind === "idle" && (
-          <>
-            <span className="update-icon idle-check">✓</span>
-            <span className="update-text">
-              v<b>{currentVersion ?? "—"}</b> · à jour
-            </span>
-          </>
+        {isIdle && (
+          <button
+            className="idle-check-btn"
+            onClick={() => runCheck(true)}
+            disabled={checking}
+            title="Cliquer pour vérifier les mises à jour"
+          >
+            {checking ? (
+              <>
+                <span className="update-icon spin">↻</span>
+                <span className="update-text">vérification…</span>
+              </>
+            ) : (
+              <>
+                <span
+                  className={`update-icon idle-check${flashUpToDate ? " flash" : ""}`}
+                >
+                  ✓
+                </span>
+                <span className="update-text">
+                  v<b>{currentVersion ?? "—"}</b> · à jour
+                </span>
+              </>
+            )}
+          </button>
         )}
         {state.kind === "available" && (
           <>
@@ -138,9 +182,31 @@ const bannerCss = `
   background: transparent;
   border-color: var(--line-bright);
   color: var(--muted);
+  gap: 0;
+  padding: 0;
+}
+.idle-check-btn {
+  display: flex;
+  align-items: center;
   gap: 6px;
   padding: 3px 10px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  border-radius: 2px;
 }
+.idle-check-btn:hover:not(:disabled) {
+  background: rgba(0, 255, 159, 0.08);
+  color: var(--text);
+}
+.idle-check-btn:hover:not(:disabled) .idle-check {
+  opacity: 1;
+}
+.idle-check-btn:disabled { cursor: wait; }
 .update-banner.idle .update-text {
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -158,8 +224,28 @@ const bannerCss = `
   color: var(--phosphor);
   opacity: 0.65;
   font-size: 11px;
+  transition: opacity 0.15s;
+}
+.update-icon.idle-check.flash {
+  opacity: 1;
+  animation: flash-up 0.4s ease-out;
+}
+@keyframes flash-up {
+  0% { transform: scale(1.6); opacity: 0.2; }
+  60% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
 }
 .update-icon.pulse { animation: blink 1.4s infinite; }
+.update-icon.spin {
+  display: inline-block;
+  animation: spin 0.9s linear infinite;
+  color: var(--phosphor);
+  opacity: 0.85;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 .update-text b {
   color: var(--phosphor);
   font-weight: 500;

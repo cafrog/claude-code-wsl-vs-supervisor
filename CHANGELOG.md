@@ -7,6 +7,30 @@ versioning [SemVer](https://semver.org/lang/fr/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-22
+
+### Corrigé
+
+- Statut bloqué sur "pense" après une commande locale (`/mcp`, `/model`, etc.) :
+  le tag `<local-command-caveat>` est maintenant filtré au même titre que les
+  autres messages synthétiques de Claude Code.
+- L'auto-updater ne détectait aucune mise à jour : le fichier `latest.json`
+  manquait dans les releases GitHub à cause d'un bug de `tauri-action` avec les
+  espaces dans le `productName`. Une étape dédiée du workflow génère et uploade
+  désormais `latest.json` + le `.nsis.zip` signé.
+
+### Ajouté
+
+- Le badge de version dans la barre d'en-tête est maintenant **cliquable** pour
+  forcer immédiatement une recherche de mise à jour (icône `↻` pendant la
+  vérification, retour à `✓ à jour` ensuite).
+
+### Modifié
+
+- L'auto-updater vérifie désormais les nouvelles versions toutes les 30 min
+  pendant que l'app tourne, et immédiatement au retour de focus sur la fenêtre
+  (plus seulement au démarrage).
+
 ## [0.1.0] - 2026-04-21
 
 Première release publique.

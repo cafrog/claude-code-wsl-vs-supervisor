@@ -29,24 +29,81 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          prefix-key: v1-rust
 
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tauri app (NSIS + MSI + updater signature + latest.json)
-        uses: tauri-apps/tauri-action@v0
+      # Build the Tauri app directly (no tauri-action: it silently deletes
+      # the .sig and updater .zip files when it can't build latest.json,
+      # which breaks auto-updates for products with spaces in the name).
+      - name: Build Tauri app (NSIS + MSI, signed)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Claude Code WSL VS Supervisor ${{ github.ref_name }}"
-          releaseBody: "See CHANGELOG for details."
-          releaseDraft: false
-          prerelease: false
-          updaterJsonPreferNsis: true
-          args: "--bundles nsis,msi"
+        run: npm run tauri build -- --bundles nsis,msi
+
+      - name: Generate updater latest.json
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace "^v", ""
+          $bundleRoot = Join-Path $PWD "src-tauri\target\release\bundle"
+
+          Write-Host "=== all files in $bundleRoot ==="
+          Get-ChildItem -Recurse $bundleRoot |
+            Where-Object { -not $_.PSIsContainer } |
+            ForEach-Object { Write-Host " - $($_.FullName)" }
+
+          # Tauri 2 with createUpdaterArtifacts=true signs the main installer
+          # directly (.exe.sig / .msi.sig). Prefer NSIS setup.exe; fall back to MSI.
+          $artifact = $null
+          $nsisDir = Join-Path $bundleRoot "nsis"
+          if (Test-Path $nsisDir) {
+            $artifact = Get-ChildItem $nsisDir |
+              Where-Object { $_.Name.EndsWith("-setup.exe") -and (Test-Path "$($_.FullName).sig") } |
+              Select-Object -First 1
+          }
+          if (-not $artifact) {
+            $msiDir = Join-Path $bundleRoot "msi"
+            if (Test-Path $msiDir) {
+              $artifact = Get-ChildItem $msiDir |
+                Where-Object { $_.Name.EndsWith(".msi") -and (Test-Path "$($_.FullName).sig") } |
+                Select-Object -First 1
+            }
+          }
+          if (-not $artifact) { throw "No signed installer found (.exe or .msi with .sig)" }
+          $sigFile = "$($artifact.FullName).sig"
+          Write-Host "Using: $($artifact.FullName)"
+
+          $signature = (Get-Content -Path $sigFile -Raw).Trim()
+          $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+          # GitHub renames spaces to dots in asset URLs
+          $ghName = $artifact.Name -replace " ", "."
+          $downloadUrl = "https://github.com/${{ github.repository }}/releases/download/$tag/$ghName"
+
+          $payload = [ordered]@{
+            version   = $version
+            notes     = "See CHANGELOG for details."
+            pub_date  = $pubDate
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{
+                signature = $signature
+                url       = $downloadUrl
+              }
+            }
+          }
+
+          $json = $payload | ConvertTo-Json -Depth 6
+          Set-Content -Path latest.json -Value $json -Encoding UTF8
+
+          Write-Host "=== latest.json ==="
+          Get-Content latest.json
+
+          # Stage latest.json in an assets dir with a stable glob path
+          New-Item -ItemType Directory -Path release-assets -Force | Out-Null
+          Copy-Item latest.json -Destination release-assets/
 
       - name: Build VS Code extension
         working-directory: vscode-extension
@@ -55,8 +112,16 @@ jobs:
           npm run compile
           npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
 
-      - name: Upload VSIX to release
+      - name: Create GitHub release with all artifacts
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: vscode-extension/*.vsix
+          name: "Claude Code WSL VS Supervisor ${{ github.ref_name }}"
+          body: "See CHANGELOG for details."
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            release-assets/*
+            vscode-extension/*.vsix
