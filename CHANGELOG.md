@@ -7,6 +7,24 @@ versioning [SemVer](https://semver.org/lang/fr/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-04-22
+
+### Corrigé
+
+- L'ordre personnalisé des projets était perdu à chaque redémarrage de l'app :
+  le premier render réconciliait la liste persistée avec un tableau de projets
+  encore vide (avant que le poller ait livré ses données) et écrasait donc
+  la sauvegarde. Le hook `useProjectOrder` ignore désormais cette phase.
+
+### Ajouté
+
+- Header projet enrichi : affichage du délai depuis la dernière interaction
+  à côté du compteur d'agents, coloré selon la fraîcheur (vert < 1 min,
+  ambre < 10 min, gris au-delà).
+- Quand un projet est plié, une ligne compacte affiche le nom de l'agent le
+  plus récent et un extrait du dernier échange, pour avoir le contexte sans
+  déplier.
+
 ## [0.1.1] - 2026-04-22
 
 ### Corrigé

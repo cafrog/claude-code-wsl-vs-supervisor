@@ -20,6 +20,43 @@ function dotsForProject(agents: Agent[]): AgentStatus[] {
   return agents.map((a) => a.status);
 }
 
+type RecentInfo = {
+  agent: Agent;
+  ts: number;
+  snippet: string;
+  kind: "user" | "assistant";
+};
+
+function mostRecentInteraction(agents: Agent[]): RecentInfo | null {
+  let best: RecentInfo | null = null;
+  for (const a of agents) {
+    const msgTs = a.lastMessageAt ?? 0;
+    const respTs = a.lastResponseAt ?? 0;
+    const ts = Math.max(msgTs, respTs);
+    if (ts <= 0) continue;
+    const kind: "user" | "assistant" = respTs >= msgTs ? "assistant" : "user";
+    const snippet =
+      (kind === "assistant" ? a.lastResponse : a.lastMessage) ?? "";
+    if (!best || ts > best.ts) best = { agent: a, ts, snippet, kind };
+  }
+  return best;
+}
+
+function formatShortDelta(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return `${h}h`;
+}
+
+function freshnessClass(ms: number): string {
+  if (ms < 60_000) return "fresh";
+  if (ms < 10 * 60_000) return "medium";
+  return "stale";
+}
+
 export function ProjectBlock({
   project,
   collapsed,
@@ -35,6 +72,11 @@ export function ProjectBlock({
 }: ProjectBlockProps) {
   const dots = dotsForProject(project.agents);
   const activeCount = project.agents.filter((a) => a.status !== "waiting").length;
+  const recent = mostRecentInteraction(project.agents);
+  const recentAge = recent ? Date.now() - recent.ts : null;
+  const recentName = recent
+    ? recent.agent.name ?? `#${recent.agent.pid}`
+    : null;
 
   function handleJump(e: React.MouseEvent) {
     e.stopPropagation();
@@ -92,8 +134,25 @@ export function ProjectBlock({
           <b>{project.agents.length}</b> agent{project.agents.length > 1 ? "s" : ""}
           {" · "}
           <b>{activeCount}</b> actif{activeCount > 1 ? "s" : ""}
+          {recentAge != null && (
+            <>
+              {" · "}
+              <b className={`pmeta-delta ${freshnessClass(recentAge)}`}>
+                {formatShortDelta(recentAge)}
+              </b>
+            </>
+          )}
         </span>
       </div>
+      {collapsed && recent && (
+        <div className="plast">
+          <span className="plast-agent">{recentName}</span>
+          <span className={`plast-arrow ${recent.kind}`}>
+            {recent.kind === "assistant" ? "‹" : "›"}
+          </span>
+          <span className="plast-snippet">{recent.snippet}</span>
+        </div>
+      )}
       {!collapsed && (
         <div className="pagents">
           {project.agents.map((a) => (
@@ -191,8 +250,50 @@ const pCss = `
   letter-spacing: 0.1em;
   text-transform: uppercase;
   margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 .pmeta b { color: var(--text); }
+.pmeta .pmeta-delta.fresh {
+  color: var(--phosphor);
+  text-shadow: 0 0 6px rgba(0, 255, 159, 0.35);
+}
+.pmeta .pmeta-delta.medium { color: var(--amber); }
+.pmeta .pmeta-delta.stale { color: var(--muted); }
+
+.plast {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 12px 8px 38px;
+  font-size: 11px;
+  color: var(--muted);
+  background: linear-gradient(90deg, rgba(0, 255, 159, 0.025) 0%, transparent 55%);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  min-width: 0;
+}
+.plast-agent {
+  color: var(--bright);
+  font-weight: 500;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.plast-arrow {
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.plast-arrow.assistant { color: var(--phosphor); }
+.plast-arrow.user { color: var(--amber); }
+.plast-snippet {
+  color: var(--soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  font-style: italic;
+}
 
 .pagents {
   display: grid;

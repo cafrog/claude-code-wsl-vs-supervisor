@@ -36,6 +36,10 @@ export function useProjectOrder(projects: Project[]): {
   // Reconcile the saved order with the live projects list:
   // keep saved names that still exist, and append new project names at the end.
   useEffect(() => {
+    // Don't reconcile against an empty projects list — the first render fires
+    // before the poller has delivered any data, and wiping would clobber the
+    // persisted order every time the app starts.
+    if (projects.length === 0) return;
     const names = new Set(projects.map((p) => p.name));
     const kept = order.filter((n) => names.has(n));
     const extras = projects.map((p) => p.name).filter((n) => !kept.includes(n));
